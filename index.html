@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STORYBOARD PRO - Branded Video Storyboard Generator</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Playfair+Display:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- Loading Overlay -->
+<div id="loadingOverlay" class="loading-overlay" style="display:none;">
+    <div class="loading-content">
+        <div class="loading-ring">
+            <div></div><div></div><div></div><div></div>
+        </div>
+        <p class="loading-text" id="loadingTitle">스토리보드를 생성하고 있습니다...</p>
+        <p class="loading-subtext" id="loadingSubtitle">브랜디드 영상 컨셉에 맞게 구성 중</p>
+        <div class="loading-progress" id="loadingProgress" style="display:none;">
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <p class="progress-text" id="progressText">0 / 6 씬 완료</p>
+        </div>
+    </div>
+</div>
+
+<!-- Header -->
+<header class="header">
+    <div class="header-inner">
+        <div class="logo">
+            <div class="logo-icon">
+                <i class="fas fa-film"></i>
+            </div>
+            <div class="logo-text">
+                <span class="logo-main">STORYBOARD</span>
+                <span class="logo-sub">PRO</span>
+            </div>
+        </div>
+        <p class="header-tagline">Branded Video Storyboard Generator</p>
+    </div>
+</header>
+
+<!-- Hero Section -->
+<section class="hero">
+    <div class="hero-inner">
+        <h1 class="hero-title">브랜디드 영상<br><span class="highlight">스토리보드</span>를 자동으로</h1>
+        <p class="hero-desc">이미지와 설명을 입력하면, 전문 브랜디드 영상 스토리보드가 자동 생성됩니다.<br>각 씬별 Nano Banana Pro 이미지 생성 프롬프트도 함께 제공됩니다.</p>
+    </div>
+</section>
+
+<!-- Input Section -->
+<section class="input-section">
+    <div class="container">
+        <div class="input-card">
+            <div class="card-header">
+                <div class="card-number">01</div>
+                <div>
+                    <h2 class="card-title">프로젝트 정보 입력</h2>
+                    <p class="card-subtitle">브랜디드 영상의 기본 정보를 입력해주세요</p>
+                </div>
+            </div>
+
+            <div class="form-grid">
+                <!-- Brand Name -->
+                <div class="form-group">
+                    <label class="form-label">
+                        <i class="fas fa-building"></i>
+                        브랜드명
+                    </label>
+                    <input type="text" id="brandName" class="form-input" placeholder="예: Samsung Galaxy">
+                </div>
+
+                <!-- Product Name -->
+                <div class="form-group">
+                    <label class="form-label">
+                        <i class="fas fa-box"></i>
+                        제품/서비스명
+                    </label>
+                    <input type="text" id="productName" class="form-input" placeholder="예: Galaxy S25 Ultra">
+                </div>
+
+                <!-- Video Duration -->
+                <div class="form-group">
+                    <label class="form-label">
+                        <i class="fas fa-clock"></i>
+                        영상 길이
+                    </label>
+                    <select id="videoDuration" class="form-input">
+                        <option value="15">15초</option>
+                        <option value="30" selected>30초</option>
+                        <option value="60">60초</option>
+                        <option value="90">90초</option>
+                        <option value="120">2분</option>
+                    </select>
+                </div>
+
+                <!-- Video Mood -->
+                <div class="form-group">
+                    <label class="form-label">
+                        <i class="fas fa-palette"></i>
+                        영상 분위기
+                    </label>
+                    <select id="videoMood" class="form-input">
+                        <option value="premium">프리미엄 / 럭셔리</option>
+                        <option value="modern">모던 / 미니멀</option>
+                        <option value="warm">따뜻한 / 감성적</option>
+                        <option value="dynamic">다이내믹 / 에너지</option>
+                        <option value="nature">자연 / 친환경</option>
+                        <option value="tech">테크 / 미래지향</option>
+                        <option value="lifestyle">라이프스타일</option>
+                        <option value="cinematic">시네마틱</option>
+                    </select>
+                </div>
+
+                <!-- Target Audience -->
+                <div class="form-group full-width">
+                    <label class="form-label">
+                        <i class="fas fa-users"></i>
+                        타겟 오디언스
+                    </label>
+                    <input type="text" id="targetAudience" class="form-input" placeholder="예: 20-30대 테크에 관심 있는 프리미엄 소비자">
+                </div>
+
+                <!-- Key Message -->
+                <div class="form-group full-width">
+                    <label class="form-label">
+                        <i class="fas fa-bullhorn"></i>
+                        핵심 메시지 / 슬로건
+                    </label>
+                    <input type="text" id="keyMessage" class="form-input" placeholder="예: 당신의 일상을 혁신하다">
+                </div>
+
+                <!-- Description -->
+                <div class="form-group full-width">
+                    <label class="form-label">
+                        <i class="fas fa-align-left"></i>
+                        영상 설명 / 브리프
+                    </label>
+                    <textarea id="videoDescription" class="form-textarea" rows="5" placeholder="영상에서 보여주고 싶은 내용, 스토리라인, 특별히 포함할 장면 등을 자유롭게 설명해주세요.&#10;&#10;예: 도시의 새벽, 한 남성이 갤럭시로 하루를 시작하는 모습부터 시작해서 업무, 운동, 야경 촬영까지 하루 종일 갤럭시와 함께하는 라이프스타일을 보여주는 영상"></textarea>
+                </div>
+            </div>
+        </div>
+
+        <!-- Image Upload Section -->
+        <div class="input-card">
+            <div class="card-header">
+                <div class="card-number">02</div>
+                <div>
+                    <h2 class="card-title">참고 이미지 업로드</h2>
+                    <p class="card-subtitle">제품 이미지, 무드보드, 참고 비주얼을 업로드해주세요 (선택사항)</p>
+                </div>
+            </div>
+
+            <div class="upload-area" id="uploadArea">
+                <div class="upload-icon">
+                    <i class="fas fa-cloud-upload-alt"></i>
+                </div>
+                <p class="upload-text">이미지를 드래그하거나 클릭하여 업로드</p>
+                <p class="upload-subtext">JPG, PNG, WEBP | 최대 10장</p>
+                <input type="file" id="imageInput" multiple accept="image/*" hidden>
+            </div>
+
+            <div class="preview-grid" id="previewGrid"></div>
+        </div>
+
+        <!-- Generate Button -->
+        <div class="generate-section">
+            <button class="generate-btn" id="generateBtn" onclick="generateStoryboard()">
+                <i class="fas fa-magic"></i>
+                <span>스토리보드 생성하기</span>
+            </button>
+            <p class="generate-hint">모든 필수 정보를 입력한 후 클릭하세요</p>
+        </div>
+    </div>
+</section>
+
+<!-- Storyboard Output Section -->
+<section class="output-section" id="outputSection" style="display:none;">
+    <div class="container">
+        <!-- Storyboard Header -->
+        <div class="storyboard-header">
+            <div class="storyboard-header-top">
+                <div>
+                    <h2 class="storyboard-title">STORYBOARD</h2>
+                    <p class="storyboard-subtitle" id="storyboardSubtitle"></p>
+                </div>
+                <div class="storyboard-actions">
+                    <button class="action-btn generate-images-btn" id="generateImagesBtn" onclick="generateAllReferenceImages()">
+                        <i class="fas fa-wand-magic-sparkles"></i> AI 레퍼런스 이미지 생성
+                    </button>
+                    <button class="action-btn" onclick="exportPDF()">
+                        <i class="fas fa-file-pdf"></i> PDF 내보내기
+                    </button>
+                    <button class="action-btn secondary" onclick="window.print()">
+                        <i class="fas fa-print"></i> 인쇄
+                    </button>
+                </div>
+            </div>
+            <div class="storyboard-meta" id="storyboardMeta"></div>
+        </div>
+
+        <!-- Scene Cards Container -->
+        <div class="scenes-container" id="scenesContainer"></div>
+
+        <!-- Nano Banana Pro Prompts Section -->
+        <div class="prompts-section">
+            <div class="prompts-header">
+                <div class="prompts-header-icon">
+                    <i class="fas fa-wand-magic-sparkles"></i>
+                </div>
+                <div>
+                    <h2 class="prompts-title">Nano Banana Pro - Image Prompts</h2>
+                    <p class="prompts-subtitle">각 씬별 이미지 생성을 위한 영어 프롬프트입니다. 복사하여 바로 사용하세요.</p>
+                </div>
+            </div>
+            <div class="prompts-container" id="promptsContainer"></div>
+        </div>
+
+        <!-- Back to Top -->
+        <div class="back-to-input">
+            <button class="action-btn secondary" onclick="scrollToTop()">
+                <i class="fas fa-arrow-up"></i> 새 스토리보드 만들기
+            </button>
+        </div>
+    </div>
+</section>
+
+<!-- Footer -->
+<footer class="footer">
+    <div class="container">
+        <p>STORYBOARD PRO &copy; 2026 &mdash; Branded Video Storyboard Generator</p>
+    </div>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
