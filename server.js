@@ -1,40 +1,69 @@
+require('dotenv').config();
 const express = require('express');
 const path = require('path');
-const cors = require('cors');
+const cookieParser = require('cookie-parser');
+const crypto = require('crypto');
 
 const app = express();
-app.use(cors());
-app.use(express.json({ limit: '50mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
 
-// ── Image proxy to avoid CORS issues with external image APIs ──
-app.get('/api/proxy-image', async (req, res) => {
-    try {
-        const { url } = req.query;
-        if (!url) return res.status(400).json({ error: 'Missing url parameter' });
+// ── Middleware ──
+app.use(express.json({ limit: '1mb' }));
+app.use(cookieParser(process.env.COOKIE_SECRET || 'default-secret'));
 
-        const response = await fetch(url, {
-            headers: { 'User-Agent': 'StoryboardPro/1.0' },
-            signal: AbortSignal.timeout(60000)
-        });
+// ── Auth helpers ──
+const AUTH_COOKIE = 'auth_token';
+const COOKIE_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
 
-        if (!response.ok) {
-            return res.status(response.status).json({ error: `Upstream error: ${response.status}` });
-        }
+function makeToken(password) {
+  return crypto.createHmac('sha256', process.env.COOKIE_SECRET || 'default-secret')
+    .update(password)
+    .digest('hex');
+}
 
-        const contentType = response.headers.get('content-type') || 'image/jpeg';
-        res.setHeader('Content-Type', contentType);
-        res.setHeader('Cache-Control', 'public, max-age=3600');
+function requireAuth(req, res, next) {
+  const token = req.signedCookies[AUTH_COOKIE];
+  const expected = makeToken(process.env.APP_PASSWORD || 'changeme');
+  if (token === expected) return next();
+  return res.status(401).json({ error: 'Unauthorized' });
+}
 
-        const buffer = Buffer.from(await response.arrayBuffer());
-        res.send(buffer);
-    } catch (err) {
-        console.error('Proxy image error:', err.message);
-        res.status(500).json({ error: err.message });
-    }
+// ── Auth routes (no auth required) ──
+app.post('/api/login', (req, res) => {
+  const { password } = req.body;
+  if (!password) return res.status(400).json({ error: 'Password required' });
+
+  if (password === (process.env.APP_PASSWORD || 'changeme')) {
+    const token = makeToken(password);
+    res.cookie(AUTH_COOKIE, token, {
+      signed: true,
+      httpOnly: true,
+      maxAge: COOKIE_MAX_AGE,
+      sameSite: 'lax',
+    });
+    return res.json({ ok: true });
+  }
+  return res.status(401).json({ error: 'Wrong password' });
 });
 
-const PORT = 3000;
+app.get('/api/auth-check', (req, res) => {
+  const token = req.signedCookies[AUTH_COOKIE];
+  const expected = makeToken(process.env.APP_PASSWORD || 'changeme');
+  if (token === expected) return res.json({ ok: true });
+  return res.status(401).json({ error: 'Unauthorized' });
+});
+
+app.post('/api/logout', (_req, res) => {
+  res.clearCookie(AUTH_COOKIE);
+  res.json({ ok: true });
+});
+
+// ── Protected API routes ──
+// (Day 2: transcribe, correct, process will be added here)
+
+// ── Static files (served for all non-API routes) ──
+app.use(express.static(path.join(__dirname, 'public')));
+
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Storyboard Pro server running on port ${PORT}`);
+  console.log(`Audio-to-Text server running on port ${PORT}`);
 });
