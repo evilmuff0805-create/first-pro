@@ -31,18 +31,34 @@
 - Whisper 로컬: Railway $5 플랜 RAM 부족 (medium=1.7GB, large=3GB)
 - Hugging Face Inference: 느리고 불안정
 
-### 맞춤법 교정: OpenAI GPT-4o-mini
+### 맞춤법 교정: hanspell (다음 + 부산대 맞춤법 검사기) — 무료
 
 | 항목 | 내용 |
 |------|------|
-| 선정 이유 | 이미 openai SDK 설치됨, 한국어 문맥 교정 최우수 |
-| 가격 | $0.15/1M input, $0.60/1M output |
-| 월 비용 | $0.50 ~ $2.00 |
+| 선정 이유 | **완전 무료**, Node.js 직접 사용, 다음(Daum)+부산대(PNU) 이중 검사 |
+| 패키지 | `hanspell` npm (v0.9.7) |
+| 검사 엔진 | `spellCheckByDAUM()` + `spellCheckByPNU()` |
+| 가격 | **$0** |
+| 한국어 품질 | 띄어쓰기, 문법, 맞춤법 교정 가능 |
+| 텍스트 제한 | ~300단어 또는 1000자/요청 (내장 청크 처리) |
+| 월 비용 | **$0** |
+
+**동작 방식:**
+- 다음(Daum) 맞춤법 검사기와 부산대 맞춤법 검사기의 웹 서비스에 HTTP 요청
+- 공식 API가 아닌 리버스 엔지니어링 기반 (py-hanspell과 동일 방식)
+- 두 엔진 결과를 병합하여 더 정확한 교정 제공
+
+**주의사항:**
+- 패키지 최종 업데이트: ~3년 전 (안정적이나 유지보수 없음)
+- 콜백 기반 API → Promise 래퍼 필요
+- 요청 간 딜레이 권장 (100~500ms, 서비스 부하 방지)
+- 대용량 텍스트는 자동 분할 처리됨 (1000자 단위)
 
 **탈락 대안:**
-- Hanspell npm: 3년간 업데이트 없음, 외부 서비스 의존
-- py-hanspell: Python 별도 서비스 필요 → 복잡도 증가
+- GPT-4o-mini: 품질 우수하나 유료 ($0.50~2.00/월) → 무료 운영 목표에 부적합
+- py-hanspell (Naver): passportKey 매일 변경 → 매우 불안정, 유지보수 불가
 - LanguageTool: 한국어 미지원
+- Naver 맞춤법 검사기 직접 호출: 공식 API 없음, IP 차단 위험
 
 ### 대용량 파일 처리 전략
 
@@ -90,7 +106,15 @@ first-pro/
   "fluent-ffmpeg": "^2.1.3",
   "cookie-parser": "^1.4.7",
   "uuid": "^11.0.0",
-  "groq-sdk": "^0.9.0"
+  "groq-sdk": "^0.9.0",
+  "hanspell": "^0.9.7"
+}
+```
+
+**제거할 의존성:**
+```json
+{
+  "openai": "^6.22.0"    // GPT-4o-mini 제거 → hanspell 무료 교정으로 대체
 }
 ```
 
@@ -122,7 +146,13 @@ POST /api/transcribe  multipart(audio, max 200MB)
 POST /api/correct     { text, language? }
                       → { original, corrected, changes[] }
 ```
-처리: GPT-4o-mini에 JSON 형식으로 교정 결과 요청
+처리 흐름:
+1. 텍스트를 1000자 단위로 분할
+2. hanspell `spellCheckByDAUM()` + `spellCheckByPNU()` 병렬 호출
+3. 두 엔진 결과 병합 (다음 결과 우선, PNU로 보완)
+4. 각 교정 항목: { token, suggestions, type(맞춤법/띄어쓰기/문법) }
+5. 원본 텍스트에 교정 적용 → corrected 텍스트 생성
+6. changes 배열: 변경 전/후 목록 반환
 
 ### 통합 파이프라인
 ```
@@ -217,12 +247,12 @@ POST /api/process     multipart(audio)
 ## 8. 환경변수
 
 ```
-OPENAI_API_KEY=sk-...        # GPT-4o-mini 맞춤법 교정
 GROQ_API_KEY=gsk_...         # Groq Whisper STT (무료, groq.com)
 APP_PASSWORD=...             # 가족 공용 비밀번호
 COOKIE_SECRET=...            # 쿠키 서명 시크릿
 PORT=3000
 ```
+> OpenAI API 키 불필요 — 맞춤법 교정은 hanspell (다음+부산대) 무료 서비스 사용
 
 ---
 
@@ -232,17 +262,20 @@ PORT=3000
 |------|:---:|:---:|
 | Railway 호스팅 | $5.00 | $5.00 |
 | Groq Whisper STT | **$0** | **$0** |
-| GPT-4o-mini 교정 | $0.50 | $2.00 |
-| **합계** | **$5.50** | **$7.00** |
+| hanspell 맞춤법 교정 | **$0** | **$0** |
+| **합계** | **$5.00** | **$5.00** |
 
-Groq 무료 티어: 28,800초/일 = 480분/일 → 가족 사용량으로 사실상 무제한
+**API 비용 = $0!**
+- Groq 무료 티어: 28,800초/일 = 480분/일 → 사실상 무제한
+- hanspell: 다음+부산대 무료 서비스
+- OpenAI API 키 불필요 → 완전 무료 운영 (Railway 호스팅비만 발생)
 
 ---
 
 ## 10. MVP 개발 순서 (3일)
 
 ### Day 1: 인프라 + 인증
-1. 의존성 설치 (multer, dotenv, fluent-ffmpeg, cookie-parser, uuid, groq-sdk)
+1. 의존성 설치 (multer, dotenv, fluent-ffmpeg, cookie-parser, uuid, groq-sdk, hanspell) + openai 제거
 2. .env, .gitignore 정비
 3. tasks/ 파일 생성
 4. server.js 재작성 (인증 미들웨어, 기본 라우팅)
@@ -254,7 +287,7 @@ Groq 무료 티어: 28,800초/일 = 480분/일 → 가족 사용량으로 사실
 8. 청크 분할 로직 (25MB 제한 대응)
 9. Groq Whisper 호출 + 텍스트 병합
 10. 업로드 UI (드래그앤드롭, 진행률)
-11. GPT-4o-mini 교정 API
+11. hanspell 교정 API (다음+부산대 이중 검사, Promise 래퍼)
 12. diff 비교 로직 + 결과 UI
 
 ### Day 3: 완성도 + 배포
