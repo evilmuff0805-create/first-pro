@@ -1,8 +1,14 @@
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
+const fs = require('fs');
 const cookieParser = require('cookie-parser');
 const crypto = require('crypto');
+const multer = require('multer');
+const { v4: uuidv4 } = require('uuid');
+const ffmpeg = require('fluent-ffmpeg');
+const Groq = require('groq-sdk');
+const { spellCheckByDAUM } = require('hanspell');
 
 const app = express();
 
@@ -57,8 +63,191 @@ app.post('/api/logout', (_req, res) => {
   res.json({ ok: true });
 });
 
-// ── Protected API routes ──
-// (Day 2: transcribe, correct, process will be added here)
+// ── Multer setup (disk storage, 200MB limit) ──
+const UPLOADS = path.join(__dirname, 'uploads');
+if (!fs.existsSync(UPLOADS)) fs.mkdirSync(UPLOADS);
+
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, UPLOADS),
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    cb(null, uuidv4() + ext);
+  },
+});
+const upload = multer({
+  storage,
+  limits: { fileSize: 200 * 1024 * 1024 },
+});
+
+// ── Groq client ──
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+
+// ── Helper: ffmpeg extract audio → mp3 ──
+function extractAudio(inputPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .noVideo()
+      .audioCodec('libmp3lame')
+      .audioBitrate('64k')
+      .audioChannels(1)
+      .output(outputPath)
+      .on('end', () => resolve(outputPath))
+      .on('error', (err) => reject(err))
+      .run();
+  });
+}
+
+// ── Helper: ffmpeg split audio into chunks ──
+function splitAudio(inputPath, chunkDir, chunkSeconds = 600) {
+  return new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(inputPath, (err, metadata) => {
+      if (err) return reject(err);
+      const duration = metadata.format.duration || 0;
+      const chunks = [];
+      let start = 0;
+      let idx = 0;
+
+      function nextChunk() {
+        if (start >= duration) return resolve(chunks);
+        const outPath = path.join(chunkDir, `chunk_${idx}.mp3`);
+        ffmpeg(inputPath)
+          .setStartTime(start)
+          .setDuration(Math.min(chunkSeconds, duration - start))
+          .noVideo()
+          .audioCodec('libmp3lame')
+          .audioBitrate('64k')
+          .audioChannels(1)
+          .output(outPath)
+          .on('end', () => {
+            chunks.push(outPath);
+            start += chunkSeconds;
+            idx++;
+            nextChunk();
+          })
+          .on('error', (e) => reject(e))
+          .run();
+      }
+      nextChunk();
+    });
+  });
+}
+
+// ── Helper: Groq Whisper STT ──
+async function transcribeFile(filePath) {
+  const result = await groq.audio.transcriptions.create({
+    model: 'whisper-large-v3-turbo',
+    file: fs.createReadStream(filePath),
+    response_format: 'verbose_json',
+  });
+  return { text: result.text || '', language: result.language || '' };
+}
+
+// ── Helper: hanspell Promise wrapper (DAUM) ──
+function checkSpell(text) {
+  if (!text || text.trim().length === 0) return Promise.resolve([]);
+  return new Promise((resolve) => {
+    const allTypos = [];
+    spellCheckByDAUM(text, 10000,
+      (typos) => allTypos.push(...typos),
+      () => resolve(allTypos),
+      () => resolve(allTypos), // on error, return what we have
+    );
+  });
+}
+
+// ── Helper: apply typos to text ──
+function applyCorrections(text, typos) {
+  let corrected = text;
+  const changes = [];
+  for (const t of typos) {
+    if (t.suggestions && t.suggestions.length > 0 && t.token !== t.suggestions[0]) {
+      const before = corrected;
+      corrected = corrected.replace(t.token, t.suggestions[0]);
+      if (corrected !== before) {
+        changes.push({ original: t.token, corrected: t.suggestions[0] });
+      }
+    }
+  }
+  return { corrected, changes };
+}
+
+// ── Helper: cleanup temp files ──
+function cleanup(...paths) {
+  for (const p of paths) {
+    try {
+      if (fs.existsSync(p)) {
+        const stat = fs.statSync(p);
+        if (stat.isDirectory()) fs.rmSync(p, { recursive: true });
+        else fs.unlinkSync(p);
+      }
+    } catch { /* ignore */ }
+  }
+}
+
+// ── POST /api/process — full pipeline ──
+app.post('/api/process', requireAuth, upload.single('audio'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No audio file uploaded' });
+
+  const uploadedPath = req.file.path;
+  const chunkDir = path.join(UPLOADS, uuidv4() + '_chunks');
+  let audioPath = uploadedPath;
+  const tempFiles = [uploadedPath, chunkDir];
+
+  try {
+    // Step 1: Extract audio if video
+    const mime = req.file.mimetype || '';
+    if (mime.startsWith('video/')) {
+      audioPath = uploadedPath + '.mp3';
+      tempFiles.push(audioPath);
+      await extractAudio(uploadedPath, audioPath);
+    }
+
+    // Step 2: Check size and split if needed
+    const fileSize = fs.statSync(audioPath).size;
+    const MAX_CHUNK = 25 * 1024 * 1024; // 25MB
+    let texts = [];
+    let detectedLang = '';
+
+    if (fileSize <= MAX_CHUNK) {
+      // Direct transcription
+      const result = await transcribeFile(audioPath);
+      texts.push(result.text);
+      detectedLang = result.language;
+    } else {
+      // Split into chunks
+      fs.mkdirSync(chunkDir, { recursive: true });
+      const chunks = await splitAudio(audioPath, chunkDir);
+      for (const chunk of chunks) {
+        const result = await transcribeFile(chunk);
+        texts.push(result.text);
+        if (!detectedLang) detectedLang = result.language;
+      }
+    }
+
+    const transcription = texts.join(' ').trim();
+
+    // Step 3: Spell correction (Korean only)
+    let corrected = transcription;
+    let changes = [];
+    if (detectedLang === 'ko' || /[\uAC00-\uD7A3]/.test(transcription)) {
+      try {
+        const typos = await checkSpell(transcription);
+        const result = applyCorrections(transcription, typos);
+        corrected = result.corrected;
+        changes = result.changes;
+      } catch {
+        // spell check failed, return uncorrected
+      }
+    }
+
+    res.json({ transcription, corrected, changes, language: detectedLang });
+  } catch (err) {
+    console.error('Process error:', err.message);
+    res.status(500).json({ error: err.message || 'Processing failed' });
+  } finally {
+    cleanup(...tempFiles);
+  }
+});
 
 // ── Static files (served for all non-API routes) ──
 app.use(express.static(path.join(__dirname, 'public')));
