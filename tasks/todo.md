@@ -50,11 +50,18 @@
 
 ## Day 3: 완성도 + 배포
 
-- [ ] 텍스트 복사/다운로드 기능
-- [ ] 변환 이력 (localStorage)
-- [ ] 에러 처리 UX
-- [ ] Railway 배포 설정
-- [ ] 최종 검증
+- [x] 텍스트 복사/다운로드 기능 (Day 1에서 구현 완료)
+- [x] 변환 이력 localStorage (Day 1에서 구현 완료)
+- [x] 에러 처리 UX (AbortController 10분 타임아웃, showError, multer 413 처리)
+- [x] Railway 배포 설정 확인 (nixpacks.toml, package.json scripts)
+- [x] 최종 검증
+
+### Day 3 검증 결과
+- multer 200MB 초과: 413 + 한국어 에러 메시지 반환
+- 프론트엔드 AbortController: 10분 타임아웃 + showError() 표시
+- server.timeout / keepAliveTimeout: 10분 설정 완료
+- Railway 배포 준비: nixpacks.toml (ffmpeg), start 스크립트 OK
+- 환경변수: GROQ_API_KEY, APP_PASSWORD, COOKIE_SECRET (Railway 대시보드에서 설정 필요)
 
 ---
 

@@ -185,7 +185,17 @@ function cleanup(...paths) {
 }
 
 // ── POST /api/process — full pipeline ──
-app.post('/api/process', requireAuth, upload.single('audio'), async (req, res) => {
+app.post('/api/process', requireAuth, (req, res, next) => {
+  upload.single('audio')(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({ error: '파일 크기가 200MB를 초과합니다' });
+      }
+      return res.status(400).json({ error: err.message || '파일 업로드 실패' });
+    }
+    next();
+  });
+}, async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No audio file uploaded' });
 
   const uploadedPath = req.file.path;
@@ -253,6 +263,8 @@ app.post('/api/process', requireAuth, upload.single('audio'), async (req, res) =
 app.use(express.static(path.join(__dirname, 'public')));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`Audio-to-Text server running on port ${PORT}`);
 });
+server.timeout = 10 * 60 * 1000; // 10 min for large file processing
+server.keepAliveTimeout = 10 * 60 * 1000;

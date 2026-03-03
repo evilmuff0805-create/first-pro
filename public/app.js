@@ -131,6 +131,17 @@ function showProgress(pct, text) {
   progressText.textContent = text;
 }
 
+function showError(msg) {
+  resultSection.hidden = false;
+  correctedText.value = '';
+  originalText.value = '';
+  diffView.innerHTML = '';
+  changesSummary.hidden = true;
+  // Reuse the corrected tab to show the error
+  correctedText.value = '오류가 발생했습니다:\n\n' + msg;
+  activateTab('corrected');
+}
+
 startBtn.addEventListener('click', async () => {
   if (!selectedFile) return;
 
@@ -142,16 +153,22 @@ startBtn.addEventListener('click', async () => {
   form.append('audio', selectedFile);
 
   try {
-    showProgress(30, 'STT 변환 중...');
+    showProgress(20, '파일 업로드 중...');
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10 * 60 * 1000); // 10min
+
     const res = await fetch('/api/process', {
       method: 'POST',
       body: form,
+      signal: controller.signal,
     });
+    clearTimeout(timeout);
 
     if (res.status === 401) { showLogin(); return; }
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: 'Server error' }));
-      throw new Error(err.error || 'Processing failed');
+      const err = await res.json().catch(() => ({}));
+      if (res.status === 413) throw new Error(err.error || '파일 크기가 200MB를 초과합니다');
+      throw new Error(err.error || '처리 중 오류가 발생했습니다');
     }
 
     showProgress(90, '결과 처리 중...');
@@ -160,7 +177,10 @@ startBtn.addEventListener('click', async () => {
     addHistory(selectedFile.name, data);
     clearFile();
   } catch (err) {
-    alert('오류: ' + err.message);
+    const msg = err.name === 'AbortError'
+      ? '요청 시간이 초과되었습니다 (10분). 더 작은 파일로 시도해주세요.'
+      : err.message;
+    showError(msg);
   } finally {
     progressSection.hidden = true;
     startBtn.disabled = false;
