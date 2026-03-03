@@ -176,6 +176,47 @@ function applyCorrections(text, typos) {
   return { corrected, changes };
 }
 
+// ── Helper: remove Whisper hallucination artifacts ──
+const HALLUCINATION_PATTERNS = [
+  /한글\s*자막\s*(by|제작|제공).*/gi,
+  /자막\s*(by|제작|제공|:).*/gi,
+  /번역\s*및\s*자막.*/gi,
+  /구독과?\s*좋아요.*/gi,
+  /subscribe\s*(and|&)?\s*like.*/gi,
+  /thanks?\s*for\s*watching.*/gi,
+  /please\s*(subscribe|like).*/gi,
+  /subtitles?\s*(by|made|created|provided).*/gi,
+  /자막\s*@.*/gi,
+  /영상\s*제작.*/gi,
+  /MBC\s*뉴스.*/gi,
+  /KBS\s*뉴스.*/gi,
+  /SBS\s*뉴스.*/gi,
+  /YTN\s*뉴스.*/gi,
+];
+
+function removeHallucinations(text) {
+  let cleaned = text;
+  for (const pat of HALLUCINATION_PATTERNS) {
+    cleaned = cleaned.replace(pat, '');
+  }
+  return cleaned.replace(/\s+/g, ' ').trim();
+}
+
+function filterHallucinatedSegments(segments) {
+  return segments.filter(seg => {
+    const t = seg.text.trim();
+    if (!t) return false;
+    for (const pat of HALLUCINATION_PATTERNS) {
+      pat.lastIndex = 0;
+      if (pat.test(t) && t.replace(pat, '').trim().length === 0) return false;
+    }
+    return true;
+  }).map(seg => ({
+    ...seg,
+    text: removeHallucinations(seg.text),
+  })).filter(seg => seg.text.trim().length > 0);
+}
+
 // ── Helper: cleanup temp files ──
 function cleanup(...paths) {
   for (const p of paths) {
@@ -246,7 +287,11 @@ app.post('/api/process', requireAuth, (req, res, next) => {
       }
     }
 
-    const transcription = texts.join(' ').trim();
+    const rawText = texts.join(' ').trim();
+
+    // Step 2.5: Remove Whisper hallucination artifacts
+    const transcription = removeHallucinations(rawText);
+    allSegments = filterHallucinatedSegments(allSegments);
 
     // Step 3: Spell correction (Korean only)
     let corrected = transcription;
