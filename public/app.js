@@ -30,11 +30,13 @@ const changesCount = $('#changesCount');
 const changesList = $('#changesList');
 const copyBtn = $('#copyBtn');
 const downloadBtn = $('#downloadBtn');
+const srtBtn = $('#srtBtn');
 
 const historySection = $('#historySection');
 const historyList = $('#historyList');
 
 let selectedFile = null;
+let lastSegments = [];
 
 // ── Auth ──
 async function checkAuth() {
@@ -192,6 +194,8 @@ function showResult(data) {
   resultSection.hidden = false;
   originalText.value = data.transcription || '';
   correctedText.value = data.corrected || data.transcription || '';
+  lastSegments = data.segments || [];
+  srtBtn.disabled = lastSegments.length === 0;
 
   // Changes
   const changes = data.changes || [];
@@ -264,6 +268,32 @@ downloadBtn.addEventListener('click', () => {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'transcription.txt';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+// ── SRT download ──
+function formatSrtTime(seconds) {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  const ms = Math.round((seconds % 1) * 1000);
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')},${String(ms).padStart(3,'0')}`;
+}
+
+function buildSrt(segments) {
+  return segments.map((seg, i) =>
+    `${i + 1}\n${formatSrtTime(seg.start)} --> ${formatSrtTime(seg.end)}\n${seg.text.trim()}\n`
+  ).join('\n');
+}
+
+srtBtn.addEventListener('click', () => {
+  if (lastSegments.length === 0) return;
+  const srt = buildSrt(lastSegments);
+  const blob = new Blob([srt], { type: 'text/srt;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'transcription.srt';
   a.click();
   URL.revokeObjectURL(a.href);
 });

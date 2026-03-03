@@ -139,7 +139,12 @@ async function transcribeFile(filePath) {
     file: fs.createReadStream(filePath),
     response_format: 'verbose_json',
   });
-  return { text: result.text || '', language: result.language || '' };
+  const segments = (result.segments || []).map(s => ({
+    start: s.start,
+    end: s.end,
+    text: s.text || '',
+  }));
+  return { text: result.text || '', language: result.language || '', segments };
 }
 
 // ── Helper: hanspell Promise wrapper (DAUM) ──
@@ -216,20 +221,27 @@ app.post('/api/process', requireAuth, (req, res, next) => {
     const fileSize = fs.statSync(audioPath).size;
     const MAX_CHUNK = 25 * 1024 * 1024; // 25MB
     let texts = [];
+    let allSegments = [];
     let detectedLang = '';
+    const CHUNK_SEC = 600; // must match splitAudio default
 
     if (fileSize <= MAX_CHUNK) {
       // Direct transcription
       const result = await transcribeFile(audioPath);
       texts.push(result.text);
+      allSegments.push(...result.segments);
       detectedLang = result.language;
     } else {
       // Split into chunks
       fs.mkdirSync(chunkDir, { recursive: true });
-      const chunks = await splitAudio(audioPath, chunkDir);
-      for (const chunk of chunks) {
-        const result = await transcribeFile(chunk);
+      const chunks = await splitAudio(audioPath, chunkDir, CHUNK_SEC);
+      for (let i = 0; i < chunks.length; i++) {
+        const result = await transcribeFile(chunks[i]);
         texts.push(result.text);
+        const offset = i * CHUNK_SEC;
+        for (const seg of result.segments) {
+          allSegments.push({ start: seg.start + offset, end: seg.end + offset, text: seg.text });
+        }
         if (!detectedLang) detectedLang = result.language;
       }
     }
@@ -250,7 +262,7 @@ app.post('/api/process', requireAuth, (req, res, next) => {
       }
     }
 
-    res.json({ transcription, corrected, changes, language: detectedLang });
+    res.json({ transcription, corrected, changes, language: detectedLang, segments: allSegments });
   } catch (err) {
     console.error('Process error:', err.message);
     res.status(500).json({ error: err.message || 'Processing failed' });
