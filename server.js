@@ -1,40 +1,270 @@
+require('dotenv').config();
 const express = require('express');
 const path = require('path');
-const cors = require('cors');
+const fs = require('fs');
+const cookieParser = require('cookie-parser');
+const crypto = require('crypto');
+const multer = require('multer');
+const { v4: uuidv4 } = require('uuid');
+const ffmpeg = require('fluent-ffmpeg');
+const Groq = require('groq-sdk');
+const { spellCheckByDAUM } = require('hanspell');
 
 const app = express();
-app.use(cors());
-app.use(express.json({ limit: '50mb' }));
+
+// ── Middleware ──
+app.use(express.json({ limit: '1mb' }));
+app.use(cookieParser(process.env.COOKIE_SECRET || 'default-secret'));
+
+// ── Auth helpers ──
+const AUTH_COOKIE = 'auth_token';
+const COOKIE_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+function makeToken(password) {
+  return crypto.createHmac('sha256', process.env.COOKIE_SECRET || 'default-secret')
+    .update(password)
+    .digest('hex');
+}
+
+function requireAuth(req, res, next) {
+  const token = req.signedCookies[AUTH_COOKIE];
+  const expected = makeToken(process.env.APP_PASSWORD || 'changeme');
+  if (token === expected) return next();
+  return res.status(401).json({ error: 'Unauthorized' });
+}
+
+// ── Auth routes (no auth required) ──
+app.post('/api/login', (req, res) => {
+  const { password } = req.body;
+  if (!password) return res.status(400).json({ error: 'Password required' });
+
+  if (password === (process.env.APP_PASSWORD || 'changeme')) {
+    const token = makeToken(password);
+    res.cookie(AUTH_COOKIE, token, {
+      signed: true,
+      httpOnly: true,
+      maxAge: COOKIE_MAX_AGE,
+      sameSite: 'lax',
+    });
+    return res.json({ ok: true });
+  }
+  return res.status(401).json({ error: 'Wrong password' });
+});
+
+app.get('/api/auth-check', (req, res) => {
+  const token = req.signedCookies[AUTH_COOKIE];
+  const expected = makeToken(process.env.APP_PASSWORD || 'changeme');
+  if (token === expected) return res.json({ ok: true });
+  return res.status(401).json({ error: 'Unauthorized' });
+});
+
+app.post('/api/logout', (_req, res) => {
+  res.clearCookie(AUTH_COOKIE);
+  res.json({ ok: true });
+});
+
+// ── Multer setup (disk storage, 200MB limit) ──
+const UPLOADS = path.join(__dirname, 'uploads');
+if (!fs.existsSync(UPLOADS)) fs.mkdirSync(UPLOADS);
+
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, UPLOADS),
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    cb(null, uuidv4() + ext);
+  },
+});
+const upload = multer({
+  storage,
+  limits: { fileSize: 200 * 1024 * 1024 },
+});
+
+// ── Groq client ──
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+
+// ── Helper: ffmpeg extract audio → mp3 ──
+function extractAudio(inputPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .noVideo()
+      .audioCodec('libmp3lame')
+      .audioBitrate('64k')
+      .audioChannels(1)
+      .output(outputPath)
+      .on('end', () => resolve(outputPath))
+      .on('error', (err) => reject(err))
+      .run();
+  });
+}
+
+// ── Helper: ffmpeg split audio into chunks ──
+function splitAudio(inputPath, chunkDir, chunkSeconds = 600) {
+  return new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(inputPath, (err, metadata) => {
+      if (err) return reject(err);
+      const duration = metadata.format.duration || 0;
+      const chunks = [];
+      let start = 0;
+      let idx = 0;
+
+      function nextChunk() {
+        if (start >= duration) return resolve(chunks);
+        const outPath = path.join(chunkDir, `chunk_${idx}.mp3`);
+        ffmpeg(inputPath)
+          .setStartTime(start)
+          .setDuration(Math.min(chunkSeconds, duration - start))
+          .noVideo()
+          .audioCodec('libmp3lame')
+          .audioBitrate('64k')
+          .audioChannels(1)
+          .output(outPath)
+          .on('end', () => {
+            chunks.push(outPath);
+            start += chunkSeconds;
+            idx++;
+            nextChunk();
+          })
+          .on('error', (e) => reject(e))
+          .run();
+      }
+      nextChunk();
+    });
+  });
+}
+
+// ── Helper: Groq Whisper STT ──
+async function transcribeFile(filePath) {
+  const result = await groq.audio.transcriptions.create({
+    model: 'whisper-large-v3-turbo',
+    file: fs.createReadStream(filePath),
+    response_format: 'verbose_json',
+  });
+  return { text: result.text || '', language: result.language || '' };
+}
+
+// ── Helper: hanspell Promise wrapper (DAUM) ──
+function checkSpell(text) {
+  if (!text || text.trim().length === 0) return Promise.resolve([]);
+  return new Promise((resolve) => {
+    const allTypos = [];
+    spellCheckByDAUM(text, 10000,
+      (typos) => allTypos.push(...typos),
+      () => resolve(allTypos),
+      () => resolve(allTypos), // on error, return what we have
+    );
+  });
+}
+
+// ── Helper: apply typos to text ──
+function applyCorrections(text, typos) {
+  let corrected = text;
+  const changes = [];
+  for (const t of typos) {
+    if (t.suggestions && t.suggestions.length > 0 && t.token !== t.suggestions[0]) {
+      const before = corrected;
+      corrected = corrected.replace(t.token, t.suggestions[0]);
+      if (corrected !== before) {
+        changes.push({ original: t.token, corrected: t.suggestions[0] });
+      }
+    }
+  }
+  return { corrected, changes };
+}
+
+// ── Helper: cleanup temp files ──
+function cleanup(...paths) {
+  for (const p of paths) {
+    try {
+      if (fs.existsSync(p)) {
+        const stat = fs.statSync(p);
+        if (stat.isDirectory()) fs.rmSync(p, { recursive: true });
+        else fs.unlinkSync(p);
+      }
+    } catch { /* ignore */ }
+  }
+}
+
+// ── POST /api/process — full pipeline ──
+app.post('/api/process', requireAuth, (req, res, next) => {
+  upload.single('audio')(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({ error: '파일 크기가 200MB를 초과합니다' });
+      }
+      return res.status(400).json({ error: err.message || '파일 업로드 실패' });
+    }
+    next();
+  });
+}, async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No audio file uploaded' });
+
+  const uploadedPath = req.file.path;
+  const chunkDir = path.join(UPLOADS, uuidv4() + '_chunks');
+  let audioPath = uploadedPath;
+  const tempFiles = [uploadedPath, chunkDir];
+
+  try {
+    // Step 1: Extract audio if video
+    const mime = req.file.mimetype || '';
+    if (mime.startsWith('video/')) {
+      audioPath = uploadedPath + '.mp3';
+      tempFiles.push(audioPath);
+      await extractAudio(uploadedPath, audioPath);
+    }
+
+    // Step 2: Check size and split if needed
+    const fileSize = fs.statSync(audioPath).size;
+    const MAX_CHUNK = 25 * 1024 * 1024; // 25MB
+    let texts = [];
+    let detectedLang = '';
+
+    if (fileSize <= MAX_CHUNK) {
+      // Direct transcription
+      const result = await transcribeFile(audioPath);
+      texts.push(result.text);
+      detectedLang = result.language;
+    } else {
+      // Split into chunks
+      fs.mkdirSync(chunkDir, { recursive: true });
+      const chunks = await splitAudio(audioPath, chunkDir);
+      for (const chunk of chunks) {
+        const result = await transcribeFile(chunk);
+        texts.push(result.text);
+        if (!detectedLang) detectedLang = result.language;
+      }
+    }
+
+    const transcription = texts.join(' ').trim();
+
+    // Step 3: Spell correction (Korean only)
+    let corrected = transcription;
+    let changes = [];
+    if (detectedLang === 'ko' || /[\uAC00-\uD7A3]/.test(transcription)) {
+      try {
+        const typos = await checkSpell(transcription);
+        const result = applyCorrections(transcription, typos);
+        corrected = result.corrected;
+        changes = result.changes;
+      } catch {
+        // spell check failed, return uncorrected
+      }
+    }
+
+    res.json({ transcription, corrected, changes, language: detectedLang });
+  } catch (err) {
+    console.error('Process error:', err.message);
+    res.status(500).json({ error: err.message || 'Processing failed' });
+  } finally {
+    cleanup(...tempFiles);
+  }
+});
+
+// ── Static files (served for all non-API routes) ──
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ── Image proxy to avoid CORS issues with external image APIs ──
-app.get('/api/proxy-image', async (req, res) => {
-    try {
-        const { url } = req.query;
-        if (!url) return res.status(400).json({ error: 'Missing url parameter' });
-
-        const response = await fetch(url, {
-            headers: { 'User-Agent': 'StoryboardPro/1.0' },
-            signal: AbortSignal.timeout(60000)
-        });
-
-        if (!response.ok) {
-            return res.status(response.status).json({ error: `Upstream error: ${response.status}` });
-        }
-
-        const contentType = response.headers.get('content-type') || 'image/jpeg';
-        res.setHeader('Content-Type', contentType);
-        res.setHeader('Cache-Control', 'public, max-age=3600');
-
-        const buffer = Buffer.from(await response.arrayBuffer());
-        res.send(buffer);
-    } catch (err) {
-        console.error('Proxy image error:', err.message);
-        res.status(500).json({ error: err.message });
-    }
+const PORT = process.env.PORT || 3000;
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Audio-to-Text server running on port ${PORT}`);
 });
-
-const PORT = 3000;
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Storyboard Pro server running on port ${PORT}`);
-});
+server.timeout = 10 * 60 * 1000; // 10 min for large file processing
+server.keepAliveTimeout = 10 * 60 * 1000;
