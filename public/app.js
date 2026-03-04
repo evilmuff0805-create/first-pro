@@ -37,6 +37,7 @@ const historyList = $('#historyList');
 
 let selectedFile = null;
 let lastSegments = [];
+let activeTabName = 'corrected';
 
 // ── Auth ──
 async function checkAuth() {
@@ -247,15 +248,22 @@ document.querySelectorAll('.tab').forEach(tab => {
 });
 
 function activateTab(name) {
+  activeTabName = name;
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   $('#tabCorrected').hidden = name !== 'corrected';
   $('#tabOriginal').hidden = name !== 'original';
   $('#tabDiff').hidden = name !== 'diff';
 }
 
+// ── Get active text ──
+function getActiveText() {
+  if (activeTabName === 'original') return originalText.value;
+  return correctedText.value;
+}
+
 // ── Copy & Download ──
 copyBtn.addEventListener('click', () => {
-  const text = correctedText.value;
+  const text = getActiveText();
   navigator.clipboard.writeText(text).then(() => {
     copyBtn.textContent = '복사됨!';
     setTimeout(() => { copyBtn.textContent = '복사'; }, 1500);
@@ -263,7 +271,7 @@ copyBtn.addEventListener('click', () => {
 });
 
 downloadBtn.addEventListener('click', () => {
-  const text = correctedText.value;
+  const text = getActiveText();
   const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -287,9 +295,52 @@ function buildSrt(segments) {
   ).join('\n');
 }
 
+// Redistribute edited text across original time segments proportionally
+function rebuildSegments(editedText, segments) {
+  if (segments.length === 0) return [];
+  const originalTotal = segments.reduce((sum, s) => sum + s.text.trim().length, 0);
+  if (originalTotal === 0) {
+    // Equal split fallback
+    const perSeg = Math.ceil(editedText.length / segments.length);
+    return segments.map((s, i) => ({
+      start: s.start,
+      end: s.end,
+      text: editedText.slice(i * perSeg, (i + 1) * perSeg).trim(),
+    })).filter(s => s.text.length > 0);
+  }
+
+  const result = [];
+  let pos = 0;
+  for (let i = 0; i < segments.length; i++) {
+    const ratio = segments[i].text.trim().length / originalTotal;
+    const chars = i === segments.length - 1
+      ? editedText.length - pos
+      : Math.round(editedText.length * ratio);
+    // Find a natural break point (space, period, newline) near the target
+    let end = Math.min(pos + chars, editedText.length);
+    if (end < editedText.length && i < segments.length - 1) {
+      const search = editedText.slice(end, end + 20);
+      const brk = search.search(/[\s.。!?!\n]/);
+      if (brk >= 0) end += brk + 1;
+    }
+    const text = editedText.slice(pos, end).trim();
+    if (text) {
+      result.push({ start: segments[i].start, end: segments[i].end, text });
+    }
+    pos = end;
+  }
+  return result;
+}
+
 srtBtn.addEventListener('click', () => {
   if (lastSegments.length === 0) return;
-  const srt = buildSrt(lastSegments);
+  const editedText = getActiveText();
+  const originalText_ = lastSegments.map(s => s.text.trim()).join(' ');
+  // Only rebuild if text was actually edited
+  const segments = editedText.trim() !== originalText_.trim()
+    ? rebuildSegments(editedText, lastSegments)
+    : lastSegments;
+  const srt = buildSrt(segments);
   const blob = new Blob([srt], { type: 'text/srt;charset=utf-8' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);

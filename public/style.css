@@ -213,6 +213,12 @@ body {
   resize: vertical;
   outline: none;
   font-family: inherit;
+  cursor: text;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.result-text:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(108, 92, 231, 0.2);
 }
 
 .diff-view {
