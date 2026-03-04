@@ -5,7 +5,7 @@ const fs = require('fs');
 const cookieParser = require('cookie-parser');
 const crypto = require('crypto');
 const multer = require('multer');
-const { v4: uuidv4 } = require('uuid');
+
 const ffmpeg = require('fluent-ffmpeg');
 const Groq = require('groq-sdk');
 const { spellCheckByDAUM } = require('hanspell');
@@ -71,7 +71,7 @@ const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UPLOADS),
   filename: (_req, file, cb) => {
     const ext = path.extname(file.originalname);
-    cb(null, uuidv4() + ext);
+    cb(null, crypto.randomUUID() + ext);
   },
 });
 const upload = multer({
@@ -245,7 +245,7 @@ app.post('/api/process', requireAuth, (req, res, next) => {
   if (!req.file) return res.status(400).json({ error: 'No audio file uploaded' });
 
   const uploadedPath = req.file.path;
-  const chunkDir = path.join(UPLOADS, uuidv4() + '_chunks');
+  const chunkDir = path.join(UPLOADS, crypto.randomUUID() + '_chunks');
   let audioPath = uploadedPath;
   const tempFiles = [uploadedPath, chunkDir];
 
