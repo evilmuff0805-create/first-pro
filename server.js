@@ -307,6 +307,13 @@ app.post('/api/process', requireAuth, (req, res, next) => {
       }
     }
 
+    // Step 4: Remove punctuation
+    const punctRe = /[.,!?;:…·~"""''()\[\]{}<>\/\\@#$%^&*+=|`¿¡、。！？，；：「」『』【】〈〉《》（）─—―•※†‡′″°]+/g;
+    corrected = corrected.replace(punctRe, ' ').replace(/\s+/g, ' ').trim();
+    for (const seg of allSegments) {
+      seg.text = seg.text.replace(punctRe, ' ').replace(/\s+/g, ' ').trim();
+    }
+
     res.json({ transcription, corrected, changes, language: detectedLang, segments: allSegments });
   } catch (err) {
     console.error('Process error:', err.message);
