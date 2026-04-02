@@ -1,0 +1,22 @@
+{
+  "name": "stt-server",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dictionary-en": "^3.0.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "hanspell": "^0.6.4",
+    "multer": "^1.4.5-lts.1",
+    "nspell": "^2.1.4",
+    "openai": "^4.52.7"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
+  }
+}
